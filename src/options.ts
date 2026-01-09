@@ -305,6 +305,32 @@ export class Options {
     return vscode.workspace.getConfiguration().get('wakatime.apiKey') || '';
   }
 
+  public getApiEndpoints(): Array<{ url: string; apiKey: string }> {
+    const endpoints = vscode.workspace.getConfiguration().get<Array<{ url: string; apiKey: string }>>('wakatime.apiEndpoints');
+    
+    if (!endpoints || !Array.isArray(endpoints) || endpoints.length === 0) {
+      return [];
+    }
+    
+    // Validate and clean URLs
+    const suffixes = ['/', '.bulk', '/users/current/heartbeats', '/heartbeats', '/heartbeat'];
+    
+    return endpoints
+      .filter(endpoint => endpoint.url && endpoint.apiKey)
+      .map(endpoint => {
+        let cleanUrl = endpoint.url;
+        for (const suffix of suffixes) {
+          if (cleanUrl.endsWith(suffix)) {
+            cleanUrl = cleanUrl.slice(0, -suffix.length);
+          }
+        }
+        return {
+          url: cleanUrl,
+          apiKey: endpoint.apiKey
+        };
+      });
+  }
+
   private getApiUrlFromEditor(): string {
     return vscode.workspace.getConfiguration().get('wakatime.apiUrl') || '';
   }

@@ -254,12 +254,13 @@ export class WakaTime {
   }
 
   public async promptForApiUrl(): Promise<void> {
-    const apiUrls = await this.options.getApiUrls(true);
-    const message = `Current API URL(s): ${apiUrls.join(', ')}\n\nTo configure multiple API URLs, please edit your settings.json file.`;
+    const endpoints = this.options.getApiEndpoints();
+    const currentUrls = endpoints.length > 0 ? endpoints.map(e => e.url).join(', ') : 'None configured';
+    const message = `Current API Endpoints: ${currentUrls}\n\nTo configure multiple API endpoints with their API keys, please edit your settings.json file.`;
     
     vscode.window.showInformationMessage(message, 'Edit in settings.json').then((selection) => {
       if (selection === 'Edit in settings.json') {
-        vscode.commands.executeCommand('workbench.action.openSettings', 'wakatime.apiUrls');
+        vscode.commands.executeCommand('workbench.action.openSettings', 'wakatime.apiEndpoints');
       }
     });
   }

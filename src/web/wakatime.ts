@@ -46,7 +46,6 @@ export class WakaTime {
   private hasAICapabilities: boolean = false;
   private currentlyFocusedFile: string;
   private teamDevsForFileCache = {};
-  private lastApiKeyPrompted: number = 0;
   private heartbeats: Heartbeat[] = [];
   private lastSent: number = 0;
   private linesInFiles: Lines = {};
@@ -204,20 +203,14 @@ export class WakaTime {
   }
 
   public promptForApiUrl(): void {
-    const singleUrl: string = this.config.get('wakatime.apiUrl') || '';
-    const multipleUrls: string[] = this.config.get('wakatime.apiUrls') || [];
+    const endpoints = this.config.get<Array<{ url: string; apiKey: string }>>('wakatime.apiEndpoints') || [];
     
-    const apiUrls = [...multipleUrls];
-    if (singleUrl) {
-      apiUrls.push(singleUrl);
-    }
-    
-    const currentUrls = apiUrls.length > 0 ? apiUrls.join(', ') : 'https://api.wakatime.com/api/v1';
-    const message = `Current API URL(s): ${currentUrls}\n\nTo configure multiple API URLs, please edit your settings.json file.`;
+    const currentUrls = endpoints.length > 0 ? endpoints.map(e => e.url).join(', ') : 'None configured';
+    const message = `Current API Endpoints: ${currentUrls}\n\nTo configure multiple API endpoints with their API keys, please edit your settings.json file.`;
     
     vscode.window.showInformationMessage(message, 'Edit in settings.json').then((selection) => {
       if (selection === 'Edit in settings.json') {
-        vscode.commands.executeCommand('workbench.action.openSettings', 'wakatime.apiUrls');
+        vscode.commands.executeCommand('workbench.action.openSettings', 'wakatime.apiEndpoints');
       }
     });
   }
@@ -313,7 +306,8 @@ export class WakaTime {
   }
 
   public openDashboardWebsite(): void {
-    const apiUrl = this.getApiUrl();
+    const endpoints = this.config.get<Array<{ url: string; apiKey: string }>>('wakatime.apiEndpoints') || [];
+    const apiUrl = endpoints.length > 0 ? endpoints[0].url : 'https://api.wakatime.com/api/v1';
     const dashboardUrl = Utils.apiUrlToDashboardUrl(apiUrl);
     vscode.env.openExternal(vscode.Uri.parse(dashboardUrl));
   }
@@ -325,8 +319,8 @@ export class WakaTime {
   }
 
   private hasApiKey(callback: (arg0: boolean) => void): void {
-    const apiKey: string = this.config.get('wakatime.apiKey') || '';
-    callback(!Utils.apiKeyInvalid(apiKey));
+    const endpoints = this.config.get<Array<{ url: string; apiKey: string }>>('wakatime.apiEndpoints') || [];
+    callback(endpoints.length > 0 && endpoints.every(e => e.apiKey && !Utils.apiKeyInvalid(e.apiKey)));
   }
 
   private getStatusBarAlignment(): vscode.StatusBarAlignment {
@@ -658,49 +652,52 @@ export class WakaTime {
 
     this.logger.debug(`Sending heartbeats to API: ${JSON.stringify(payload)}`);
 
-    const apiKey = this.config.get('wakatime.apiKey');
-    const apiUrl = this.getApiUrl();
-    const url = `${apiUrl}/users/current/heartbeats.bulk?api_key=${apiKey}`;
+    const endpoints = this.config.get<Array<{ url: string; apiKey: string }>>('wakatime.apiEndpoints') || [];
+    
+    if (endpoints.length === 0) {
+      this.logger.error('No API endpoints configured');
+      this.promptForApiKey();
+      return;
+    }
 
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Machine-Name': vscode.env.appHost,
-        },
-        body: JSON.stringify(payload),
-      });
-      const parsedJSON = await response.json();
-      if (response.status == 200 || response.status == 201 || response.status == 202) {
-        if (this.showStatusBar) this.getCodingActivity();
-      } else {
-        this.logger.warn(`API Error ${response.status}: ${parsedJSON}`);
-        if (response && response.status == 401) {
-          const error_msg = 'Invalid WakaTime Api Key';
-          if (this.showStatusBar) {
-            this.updateStatusBarText('WakaTime Error');
-            this.updateStatusBarTooltip(`WakaTime: ${error_msg}`);
-          }
-          this.logger.error(error_msg);
-          const now: number = Date.now();
-          if (this.lastApiKeyPrompted < now - 86400000) {
-            // only prompt once per day
-            this.promptForApiKey(false);
-            this.lastApiKeyPrompted = now;
-          }
+    // Send to all endpoints
+    const requests = endpoints.map(async (endpoint) => {
+      const apiUrl = endpoint.url.replace(/\/$/, ''); // Remove trailing slash
+      const url = `${apiUrl}/users/current/heartbeats.bulk?api_key=${endpoint.apiKey}`;
+
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Machine-Name': vscode.env.appHost,
+          },
+          body: JSON.stringify(payload),
+        });
+        const parsedJSON = await response.json();
+        if (response.status == 200 || response.status == 201 || response.status == 202) {
+          this.logger.debug(`Successfully sent heartbeats to ${apiUrl}`);
         } else {
-          const error_msg = `Error sending heartbeats (${response.status}); Check your browser console for more details.`;
-          if (this.showStatusBar) {
-            this.updateStatusBarText('WakaTime Error');
-            this.updateStatusBarTooltip(`WakaTime: ${error_msg}`);
+          this.logger.warn(`API Error ${response.status} for ${apiUrl}: ${parsedJSON}`);
+          if (response && response.status == 401) {
+            const error_msg = `Invalid WakaTime Api Key for ${apiUrl}`;
+            this.logger.error(error_msg);
           }
-          this.logger.error(error_msg);
         }
+        return { success: response.status >= 200 && response.status < 300, endpoint: apiUrl };
+      } catch (ex) {
+        this.logger.warn(`API Error for ${apiUrl}: ${ex}`);
+        return { success: false, endpoint: apiUrl };
       }
-    } catch (ex) {
-      this.logger.warn(`API Error: ${ex}`);
-      const error_msg = `Error sending heartbeats; Check your browser console for more details.`;
+    });
+
+    const results = await Promise.all(requests);
+    const anySuccess = results.some(r => r.success);
+    
+    if (anySuccess) {
+      if (this.showStatusBar) this.getCodingActivity();
+    } else {
+      const error_msg = 'Failed to send heartbeats to all endpoints';
       if (this.showStatusBar) {
         this.updateStatusBarText('WakaTime Error');
         this.updateStatusBarTooltip(`WakaTime: ${error_msg}`);
@@ -725,9 +722,19 @@ export class WakaTime {
 
   private async _getCodingActivity() {
     this.logger.debug('Fetching coding activity for Today from api.');
-    const apiKey = this.config.get('wakatime.apiKey');
-    const apiUrl = this.getApiUrl();
-    const url = `${apiUrl}/users/current/statusbar/today?api_key=${apiKey}`;
+    
+    const endpoints = this.config.get<Array<{ url: string; apiKey: string }>>('wakatime.apiEndpoints') || [];
+    
+    if (endpoints.length === 0) {
+      this.logger.error('No API endpoints configured');
+      return;
+    }
+    
+    // Use the first endpoint for status bar
+    const endpoint = endpoints[0];
+    const apiUrl = endpoint.url.replace(/\/$/, '');
+    const url = `${apiUrl}/users/current/statusbar/today?api_key=${endpoint.apiKey}`;
+    
     try {
       const response = await fetch(url, {
         method: 'GET',
@@ -806,9 +813,17 @@ export class WakaTime {
     }
 
     this.logger.debug('Fetching devs for currently focused file from api.');
-    const apiKey = this.config.get('wakatime.apiKey');
-    const apiUrl = this.getApiUrl();
-    const url = `${apiUrl}/users/current/file_experts?api_key=${apiKey}`;
+    
+    const endpoints = this.config.get<Array<{ url: string; apiKey: string }>>('wakatime.apiEndpoints') || [];
+    
+    if (endpoints.length === 0) {
+      this.logger.error('No API endpoints configured');
+      return;
+    }
+    
+    const endpoint = endpoints[0];
+    const apiUrl = endpoint.url.replace(/\/$/, '');
+    const url = `${apiUrl}/users/current/file_experts?api_key=${endpoint.apiKey}`;
 
     const payload = {
       entity: file,
@@ -979,17 +994,6 @@ export class WakaTime {
       return platform;
     }
     return null;
-  }
-
-  private getApiUrl(): string {
-    let apiUrl: string = this.config.get('wakatime.apiUrl') || 'https://api.wakatime.com/api/v1';
-    const suffixes = ['/', '.bulk', '/users/current/heartbeats', '/heartbeats', '/heartbeat'];
-    for (const suffix of suffixes) {
-      if (apiUrl.endsWith(suffix)) {
-        apiUrl = apiUrl.slice(0, -suffix.length);
-      }
-    }
-    return apiUrl;
   }
 
   private countSlashesInPath(path: string): number {

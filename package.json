@@ -118,18 +118,24 @@
     "configuration": {
       "title": "WakaTime",
       "properties": {
-        "wakatime.apiKey": {
-          "type": "string",
-          "description": "Defaults to value from ~/.wakatime.cfg, unless running in browser.",
-          "scope": "application"
-        },
-        "wakatime.apiUrls": {
+        "wakatime.apiEndpoints": {
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string",
+                "description": "API endpoint URL (e.g., https://api.wakatime.com/api/v1)"
+              },
+              "apiKey": {
+                "type": "string",
+                "description": "API key for this endpoint"
+              }
+            },
+            "required": ["url", "apiKey"]
           },
           "default": [],
-          "markdownDescription": "List of API URLs to send heartbeats to. Defaults to https://api.wakatime.com/api/v1. When set, heartbeats will be sent to all URLs in this list.",
+          "markdownDescription": "List of API endpoints with their corresponding API keys. Each endpoint will receive heartbeat data. Example: `[{\"url\": \"https://api.wakatime.com/api/v1\", \"apiKey\": \"waka_xxx\"}]`",
           "scope": "application",
           "editPresentation": "multilineText"
         },
@@ -174,5 +180,8 @@
     "webpack": "^5.102.1",
     "webpack-cli": "^6.0.1",
     "which": "^5.0.0"
-  }
+  },
+  "trustedDependencies": [
+    "@playwright/browser-chromium"
+  ]
 }
